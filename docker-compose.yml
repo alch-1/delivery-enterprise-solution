@@ -1,0 +1,192 @@
+version: "3.7"
+
+networks:
+  refurban-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+    name: refurban-data
+
+services:
+  customer:
+    build:
+      context: ./customer_microservice
+      dockerfile: Dockerfile
+    depends_on:
+      - mysql
+    ports:
+      - "5000:5000"
+    environment:
+      - customer_db_url=mysql+mysqlconnector://is213@mysql:3306/customer
+    networks:
+      refurban-net:      
+
+  product:
+    build:
+      context: ./furniture_microservice
+      dockerfile: Dockerfile
+    depends_on:
+      - mysql
+    ports:
+      - "5003:5003"
+    environment:
+      - furniture_db_url=mysql+mysqlconnector://is213@mysql:3306/product
+    networks:
+      refurban-net:
+
+  purchase:
+    build:
+      context: ./purchase_microservice
+      dockerfile: Dockerfile
+    depends_on:
+      - rabbitmq
+      - mysql
+    ports:
+      - "5001:5001"
+    environment:
+      - order_db_url=mysql+mysqlconnector://is213@mysql:3306/order
+      - furniture_db_url=mysql+mysqlconnector://is213@mysql:3306/product
+      - rabbit_host=rabbitmq
+      - product_url=http://product:5003/
+      - telegram_url=http://telegram_bot:8989/message/
+      - routing_url=http://routing:5006/
+      - telegram_poll_url=http://telegram_poll:8990/
+    networks:
+      refurban-net:
+
+  paypal:
+    build:
+      context: ./paypal_microservice
+      dockerfile: Dockerfile
+    depends_on:
+      - rabbitmq
+      - mysql
+    environment:
+      - paypal_db_url=mysql+mysqlconnector://is213@mysql:3306/paypal
+      - rabbit_host=rabbitmq
+      - purchase_url=http://purchase:5001/purchase
+    ports:
+      - "5002:5002"
+    networks:
+      refurban-net:
+
+  telegram_bot:
+    build:
+      context: ./TelegramBot
+      dockerfile: Dockerfile
+    depends_on:
+      - paypal
+      - purchase
+      - rabbitmq
+      - mysql
+    ports:
+      - "8989:8989"
+    environment: 
+      - ngrok_url=http://ngrok:4551/api/tunnels
+      - routing_url=http://routing:5006/ 
+      - telegram_poll_url=http://telegram_poll:8990/
+    networks:
+      refurban-net:
+  
+  routing:
+    build: 
+      context: ./routing_microservice
+      dockerfile: Dockerfile
+    depends_on: 
+      - rabbitmq
+      - mysql
+      - purchase
+    ports:
+      - "5006:5006"
+    environment: 
+      - routing_db_url=mysql+mysqlconnector://is213@mysql:3306/routing
+      - rabbit_host=rabbitmq
+      - customer_url=http://customer:5000/customer/
+      - telegram_url=http://telegram_bot:8989/
+      - telegram_poll_url=http://telegram_poll:8990/
+    networks: 
+      refurban-net:
+    
+  telegram_poll:
+    build:
+      context: ./TelegramPoll
+      dockerfile: Dockerfile
+    depends_on:
+      - paypal
+      - purchase
+      - rabbitmq
+      - mysql
+    environment: 
+      - telegram_url=http://telegram_bot:8989/message/
+      - purchase_url=http://purchase:5001/
+      - routing_url=http://routing:5006/ 
+      - rabbit_host=rabbitmq
+      - telegram_db_url=mysql+mysqlconnector://is213@mysql:3306/telegramdata
+    ports:
+      - "8990:8990"
+    networks:
+      refurban-net:
+  
+  start_up:
+    build: 
+      context: ./start_up
+      dockerfile: Dockerfile
+    depends_on: 
+      - routing
+      - telegram_poll
+    environment: 
+      - telegram_poll_url=http://telegram_poll:8990/
+      - routing_url=http://routing:5006/ 
+    networks: 
+      refurban-net:
+  
+  ngrok:
+    image: shkoliar/ngrok:latest
+    ports:
+      - 4551:4551
+    restart: always
+    environment:
+      - DOMAIN=routing
+      - PORT=5006
+    networks: 
+      refurban-net:
+  
+  web:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    depends_on:
+      - mysql
+      - rabbitmq
+      - customer
+      - product
+    volumes:
+      - ./Refurban:/var/www/html
+    ports:
+      - "8000:80"
+    networks:
+      refurban-net:
+
+  mysql:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    command:
+      --default-authentication-plugin=mysql_native_password
+    restart: always
+    ports:
+      - "49152:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    networks:
+      refurban-net:
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:15672"
+    networks:
+      refurban-net:

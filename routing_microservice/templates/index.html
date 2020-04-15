@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>    
+
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css"
+        integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
+
+    
+    <link href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" integrity="sha384-wvfXpqpZZVQGK6TAh5PVlGOfQNHSoD2xbE+QkPxCAFlNEevoEH3Sl0sibVcOQVnN" crossorigin="anonymous">
+    
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.2.0/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+
+    <style>
+        #main {
+            min-height: 100vh;
+            max-width: 100vw;
+        }
+        #mapid {
+            min-height: 80vh;
+        }
+        body::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="spinner">
+        <div class="d-flex align-items-center justify-content-center" style="height: 100vh;">
+            <div class="text-center">
+                <div class="spinner-grow" role="status">
+                    <span class="sr-only">Loading...</span>
+                </div><br>
+                <small id="message">TSP Solver is currently at work...</small>
+            </div>
+        </div>
+    </div>
+    <div id="main">
+        <div class="container-fluid">
+            <div class="row">
+                <div class="col-12 border border-black">
+                    <div id="mapid"></div>
+                </div>
+                <div class="col-12">
+                    <h4>Route Plan</h4>
+                    <div id="route"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- Latest compiled and minified JavaScript -->
+    <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-csv/1.0.8/jquery.csv.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js"
+        integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut" crossorigin="anonymous">
+    </script>
+
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js"
+        integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k" crossorigin="anonymous">
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/randomcolor/0.5.4/randomColor.min.js"></script>
+
+    <script src="https://unpkg.com/leaflet@1.2.0/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+    <script src='https://unpkg.com/leaflet-image@latest/leaflet-image.js'></script>
+
+    <script>
+        async function sleep(ms){
+            return new Promise(r => setTimeout(r,ms));
+        }
+
+        async function drawer(lines, mymap){
+            var color = randomColor({luminosity: 'dark'});
+            for (let index = 0; index < lines.length-1; index++) {
+                const element = lines.slice(index,index+2);
+                let polyline = L.polyline(element, {color: color}).addTo(mymap);
+                await sleep(1000);
+            }
+        }
+
+        async function list_route(index, routes){
+            let list_content = '';
+            for (const item of routes) {
+                if (item == 'start'){
+                    list_content += `<li>Start Point</li>`;
+                }else{
+                    list_content += `<li>${item.address} (CODE: ${item.routing_id}-${item.order_id})</li>`;
+                }
+            }
+            $("#route").append(
+                `
+                <h5>Vehicle ${parseInt(index) +1}</h5>
+                <ol>
+                    ${list_content}
+                </ol>
+                `
+            );
+        }
+
+        async function loadGeoJsonLayer(mymap, coords) {
+            var color = randomColor({luminosity: 'dark'});
+            var serviceURL = `/geojsonFeature/${JSON.stringify(coords)}`;
+            var requestParam = {
+                mode: 'cors', // allow cross-origin resource sharing
+                method: 'GET'
+            }
+
+            try {
+                const response = await fetch(serviceURL, requestParam);
+                geojsonFeature = await response.json();
+                L.geoJSON(geojsonFeature, {style: {"color": color}}).addTo(mymap);
+            } catch (error) {
+                console.error(error);
+            }
+
+        }
+
+        async function getMapAsync(routing_id) {
+            var serviceURL = `/tspSolver/${routing_id}`;
+            var requestParam = {
+                mode: 'cors', // allow cross-origin resource sharing
+                method: 'GET'
+            }
+            var mymap = L.map('mapid', {renderer: L.canvas()}).setView([1.3328, 103.8307], 11);
+            var osm_layer = L.tileLayer("http://{s}.tile.osm.org/{z}/{x}/{y}.png",{
+                attribution: '© OpenStreetMap contributors'
+            });
+            mymap.addLayer(osm_layer);
+            $("#main").hide();
+            try {
+                // call tspSolver 
+                const response = await fetch(serviceURL, requestParam);
+                const data = await response.json();
+                
+                // obtain latitude and longtitude of locations
+                var lat_lngs = data["data"]["locations"];
+                // obtain delivery addresses
+                var address_list = data["data"]["address"];
+                
+                // markers for delivery points
+                for (const key in lat_lngs) {
+                    let lat_lng = lat_lngs[key];
+                    let address = address_list[key];
+                    var marker = L.marker(lat_lng);
+                    marker.bindTooltip(`${address}`);
+                    marker.addTo(mymap);
+                }
+
+                // Obtain optimize route
+                var routes = data["tsp"];
+                var geojson_coords_arr = [];
+                for (const key in routes) {
+                    const route = routes[key];
+                    var route_ids = route['plan_output'];
+                    let route_address = [];
+                    let geojson_coords = [];
+                    for (let x = 0; x < route_ids.length; x++) {
+                        let lat_lng = lat_lngs[route_ids[x]];
+                        let address = address_list[route_ids[x]];
+                        route_address.push(address);
+                        geojson_coords.push([lat_lng[1],lat_lng[0]]);
+                    }
+                    geojson_coords_arr.push(geojson_coords);
+
+                    list_route(key, route['routing_obj']);
+                    
+                }
+                $("#main").show();
+                $("#spinner").hide();
+
+                if (geojson_coords_arr[0].length >= 1){
+                    geojson_coords_arr.forEach(coords => {
+                        loadGeoJsonLayer(mymap, coords);
+                    });
+                }
+                
+                
+
+            } catch (error) {
+                console.log(error);
+            }           
+
+        }
+        $(async () => {
+            var routing_id = '{{ routing_id }}';
+            getMapAsync(routing_id); 
+        });
+        
+        
+
+    </script>
+</body>
+</html>
